@@ -12,6 +12,15 @@ triggers:
     - ".yarnrc.yml"
     - "**/.yarnrc.yml"
 
+detection:
+  files:
+    - "yarn.lock"
+    - "**/yarn.lock"
+    - ".yarnrc"
+    - ".yarnrc.yml"
+    - "**/.yarnrc.yml"
+    - ".yarn/**"
+
 runtime:
   name: node
   version: "22"

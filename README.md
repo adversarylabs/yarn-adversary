@@ -16,3 +16,7 @@ npm test
 adversary validate .
 adversary pack --check .
 ```
+
+## Automatic detection
+
+`adversary auto` selects the yarn adversary when changes include `yarn.lock` or `**/yarn.lock`, plus the other domain-specific patterns declared in `adversary.yaml`. Unrelated changes do not select it.
