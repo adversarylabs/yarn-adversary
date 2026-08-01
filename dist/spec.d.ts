@@ -45,7 +45,7 @@ export declare const spec: {
     readonly id: "yarn";
     readonly displayName: "Yarn";
     readonly description: "Reviews Yarn projects for insecure registries, mutable resolutions, and missing lockfiles.";
-    readonly files: ["package.json", "**/package.json", "yarn.lock", ".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml"];
+    readonly files: ["package.json", "**/package.json", "yarn.lock", "**/yarn.lock", ".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml", ".npmrc", "**/.npmrc", ".yarn/**"];
     readonly rules: [{
         readonly id: "yarn.http-registry";
         readonly title: "Yarn uses a plaintext package registry";
@@ -53,16 +53,79 @@ export declare const spec: {
         readonly category: "security";
         readonly severity: "high";
         readonly confidence: "high";
-        readonly whyItMatters: "Yarn uses a plaintext package registry weakens an important security boundary.";
-        readonly impact: "The repository may behave insecurely, unreliably, or differently from the reviewed configuration.";
-        readonly recommendation: "Use an authenticated HTTPS registry.";
+        readonly whyItMatters: "Non-TLS registry traffic allows credential and tarball interception.";
+        readonly impact: "A MITM can substitute package contents during install.";
+        readonly recommendation: "Use an authenticated HTTPS registry; regenerate the lockfile so resolved URLs are HTTPS.";
         readonly complexity: "small";
         readonly tags: ["security", "http-registry"];
         readonly match: {
             readonly kind: "content";
-            readonly files: [".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml"];
+            readonly files: [".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml", ".npmrc", "**/.npmrc", "yarn.lock", "**/yarn.lock"];
             readonly pattern: {
-                readonly pattern: "(?:registry|npmRegistryServer):\\s*[\"']?http:\\/\\/";
+                readonly pattern: "(?:registry|npmRegistryServer|resolved)\\s*[:=]\\s*[\"']?http://(?!localhost|127\\.0\\.0\\.1)";
+                readonly flags: "i";
+            };
+            readonly requires: [];
+        };
+    }, {
+        readonly id: "yarn.strict-ssl-disabled";
+        readonly title: "Yarn disables TLS certificate verification";
+        readonly summary: "Yarn disables TLS certificate verification";
+        readonly category: "security";
+        readonly severity: "high";
+        readonly confidence: "high";
+        readonly whyItMatters: "enableStrictSsl: false / strict-ssl false converts every install into a MITM opportunity.";
+        readonly impact: "Registry responses and credentials can be substituted without detection.";
+        readonly recommendation: "Install the corporate CA via caFilePath/cafile instead of disabling verification.";
+        readonly complexity: "small";
+        readonly tags: ["security", "strict-ssl"];
+        readonly match: {
+            readonly kind: "content";
+            readonly files: [".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml", ".npmrc", "**/.npmrc"];
+            readonly pattern: {
+                readonly pattern: "(?:enableStrictSsl\\s*:\\s*false|strict-ssl\\s+(?:false|0)|strict-ssl\\s*=\\s*(?:false|0))";
+                readonly flags: "i";
+            };
+            readonly requires: [];
+        };
+    }, {
+        readonly id: "yarn.checksum-ignored";
+        readonly title: "Yarn weakens lockfile integrity verification";
+        readonly summary: "Yarn weakens lockfile integrity verification";
+        readonly category: "supply-chain";
+        readonly severity: "high";
+        readonly confidence: "high";
+        readonly whyItMatters: "checksumBehavior ignore/update lets substituted tarballs install silently.";
+        readonly impact: "Lockfile no longer binds installs to verified package contents.";
+        readonly recommendation: "Keep default checksum enforcement; fix mismatches by investigating, not ignoring.";
+        readonly complexity: "small";
+        readonly tags: ["supply-chain", "checksum"];
+        readonly match: {
+            readonly kind: "content";
+            readonly files: [".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml", ".npmrc", "**/.npmrc"];
+            readonly pattern: {
+                readonly pattern: "checksumBehavior\\s*:\\s*(?:ignore|update)\\b";
+                readonly flags: "i";
+            };
+            readonly requires: [];
+        };
+    }, {
+        readonly id: "yarn.auth-token-inline";
+        readonly title: "Registry auth token committed in Yarn config";
+        readonly summary: "Registry auth token committed in Yarn config";
+        readonly category: "secrets";
+        readonly severity: "high";
+        readonly confidence: "high";
+        readonly whyItMatters: "npmAuthToken/npmAuthIdent/_authToken literals in committed rc files are publish/install credentials in git.";
+        readonly impact: "Leaked registry credentials enable package publish or private package theft.";
+        readonly recommendation: "Interpolate from environment (npmAuthToken: \"${NPM_TOKEN}\"); rotate anything already committed.";
+        readonly complexity: "small";
+        readonly tags: ["secrets", "auth-token"];
+        readonly match: {
+            readonly kind: "content";
+            readonly files: [".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml", ".npmrc", "**/.npmrc"];
+            readonly pattern: {
+                readonly pattern: "(?:npmAuthToken|npmAuthIdent)\\s*:\\s*[\"']?(?!\\$\\{)[^\\s\"'#]{8,}|_authToken\\s*=\\s*(?!\\$\\{)[^\\s\"'#]{8,}";
                 readonly flags: "i";
             };
             readonly requires: [];
@@ -74,16 +137,16 @@ export declare const spec: {
         readonly category: "supply-chain";
         readonly severity: "medium";
         readonly confidence: "high";
-        readonly whyItMatters: "Yarn resolution tracks a mutable branch weakens an important supply-chain boundary.";
-        readonly impact: "The repository may behave insecurely, unreliably, or differently from the reviewed configuration.";
-        readonly recommendation: "Pin VCS resolutions to commits.";
+        readonly whyItMatters: "Git branch resolutions re-fetch moving targets — the lockfile stops locking.";
+        readonly impact: "Branch force-push supply-chain substitution of dependencies.";
+        readonly recommendation: "Pin VCS resolutions to commit SHAs or publish to a registry.";
         readonly complexity: "small";
         readonly tags: ["supply-chain", "mutable-resolution"];
         readonly match: {
             readonly kind: "content";
-            readonly files: ["package.json", "**/package.json"];
+            readonly files: ["package.json", "**/package.json", "yarn.lock", "**/yarn.lock"];
             readonly pattern: {
-                readonly pattern: "(?:github:|git\\+https:)[^\"']+#(?:main|master|HEAD)";
+                readonly pattern: "(?:github:|git\\+https?:|git@)[^\"'\\s]+#(?:main|master|HEAD)\\b";
                 readonly flags: "i";
             };
             readonly requires: [];
@@ -95,15 +158,15 @@ export declare const spec: {
         readonly category: "supply-chain";
         readonly severity: "medium";
         readonly confidence: "high";
-        readonly whyItMatters: "Yarn project has no lockfile weakens an important supply-chain boundary.";
-        readonly impact: "The repository may behave insecurely, unreliably, or differently from the reviewed configuration.";
-        readonly recommendation: "Commit yarn.lock.";
+        readonly whyItMatters: "Without yarn.lock installs are non-reproducible and checksum enforcement has nothing to hold onto.";
+        readonly impact: "Different machines resolve different dependency trees for the same ranges.";
+        readonly recommendation: "Commit yarn.lock; use yarn install --immutable in CI.";
         readonly complexity: "small";
         readonly tags: ["supply-chain", "missing-lockfile"];
         readonly match: {
             readonly kind: "missing-file";
-            readonly triggerFiles: ["package.json", "**/package.json"];
-            readonly requiredFiles: ["yarn.lock"];
+            readonly triggerFiles: [".yarnrc.yml", "**/.yarnrc.yml", "package.json", "**/package.json"];
+            readonly requiredFiles: ["yarn.lock", "**/yarn.lock"];
         };
     }];
 };

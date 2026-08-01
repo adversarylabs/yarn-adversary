@@ -5,7 +5,14 @@ import { createApp } from "../src/index.ts";
 
 const fixture = (name: string) => new URL(`../fixtures/${name}`, import.meta.url).pathname;
 const review = (name: string, raw = false) => createApp().run({ input: { source: { path: fixture(name) } }, includeRawObservations: raw });
-const ruleCases = [{"key":"http-registry","id":"yarn.http-registry"},{"key":"mutable-resolution","id":"yarn.mutable-resolution"},{"key":"missing-lockfile","id":"yarn.missing-lockfile"}];
+const ruleCases = [
+  { key: "http-registry", id: "yarn.http-registry" },
+  { key: "strict-ssl-disabled", id: "yarn.strict-ssl-disabled" },
+  { key: "checksum-ignored", id: "yarn.checksum-ignored" },
+  { key: "auth-token-inline", id: "yarn.auth-token-inline" },
+  { key: "mutable-resolution", id: "yarn.mutable-resolution" },
+  { key: "missing-lockfile", id: "yarn.missing-lockfile" },
+];
 
 test("every initial rule has focused vulnerable and clean coverage", async () => {
   for (const rule of ruleCases) {
@@ -30,5 +37,5 @@ test("output ordering and protocol envelope are deterministic", async () => {
   assert.deepEqual(second, first);
   const envelope = JSON.parse(JSON.stringify(createAdversaryRunEnvelope(first)));
   assert.equal(envelope.protocolVersion, 1);
-  assert.equal(envelope.result.adversary.name, "yarn");
+  assert.equal(envelope.result.adversary.name, "deps/yarn");
 });

@@ -1,5 +1,5 @@
-name: yarn
-version: 0.0.3
+name: deps/yarn
+version: 0.0.4
 description: Reviews Yarn projects for insecure registries, mutable resolutions, and missing lockfiles.
 
 triggers:
