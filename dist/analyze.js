@@ -1,5 +1,5 @@
-import { readdir } from "node:fs/promises";
-import { join, sep } from "node:path";
+import { readFile, readdir } from "node:fs/promises";
+import { basename, dirname, join, posix, sep } from "node:path";
 import { observationFor } from "./rules.js";
 import { spec } from "./spec.js";
 const SKIPPED = new Set([".adversary", ".git", ".hg", ".next", ".svn", "coverage", "dist", "node_modules", "target", "vendor"]);
@@ -14,7 +14,7 @@ export async function analyzeRepository(ctx) {
     });
     const sources = scoped.map((file) => ({ path: file.path, source: file.content }));
     ctx.summary.files_scanned = sources.length;
-    const detections = spec.rules.flatMap((rule) => evaluate(rule, sources, allPaths));
+    const detections = (await Promise.all(spec.rules.map((rule) => evaluate(rule, sources, allPaths, ctx.repoPath)))).flat();
     detections.sort((a, b) => a.rule.id.localeCompare(b.rule.id) || a.file.localeCompare(b.file) || a.line - b.line || a.label.localeCompare(b.label));
     for (const detection of detections)
         ctx.observe(observationFor(detection));
@@ -26,7 +26,7 @@ export async function analyzeRepository(ctx) {
         });
     }
 }
-function evaluate(rule, sources, allPaths) {
+async function evaluate(rule, sources, allPaths, repoPath) {
     const match = rule.match;
     if (match.kind === "missing-file") {
         const triggers = allPaths.filter((path) => match.triggerFiles.some((glob) => matchesGlob(path, glob))).sort();
@@ -36,6 +36,9 @@ function evaluate(rule, sources, allPaths) {
         return [{ rule, file: triggers[0] ?? ".", line: 1, snippet: triggers[0] ?? "", label: rule.title, data: { triggerFiles: triggers.slice(0, 10), requiredFiles: match.requiredFiles } }];
     }
     const matchingSources = sources.filter((file) => match.files.some((glob) => matchesGlob(file.path, glob)));
+    if (match.kind === "docker-missing-patches") {
+        return (await Promise.all(matchingSources.map((file) => findDockerMissingPatches(rule, file, allPaths, repoPath)))).flat();
+    }
     if (match.kind === "missing-content") {
         return matchingSources.flatMap((file) => {
             if (!test(file.source, match.trigger) || test(file.source, match.required))
@@ -54,6 +57,141 @@ function evaluate(rule, sources, allPaths) {
             return [];
         return [{ rule, file: file.path, ...location, label: rule.title, data: { matchedPattern: match.pattern.pattern } }];
     });
+}
+async function findDockerMissingPatches(rule, dockerfile, allPaths, repoPath) {
+    const instructions = dockerInstructions(dockerfile.source);
+    let workdir = "/";
+    let copies = [];
+    const lockfiles = new Map();
+    const detections = [];
+    for (const instruction of instructions) {
+        if (instruction.command === "FROM") {
+            workdir = "/";
+            copies = [];
+            lockfiles.clear();
+            continue;
+        }
+        if (instruction.command === "WORKDIR") {
+            workdir = containerPath(workdir, instruction.value.trim());
+            continue;
+        }
+        if (instruction.command === "COPY" || instruction.command === "ADD") {
+            for (const copy of parseDockerCopies(instruction.value, workdir)) {
+                copies.push(copy);
+                if (copy.external)
+                    continue;
+                for (const sourcePath of allPaths.filter((path) => basename(path) === "yarn.lock" && copyContainsRepositoryPath(copy, path))) {
+                    try {
+                        const lockSource = await readFile(join(repoPath, sourcePath), "utf8");
+                        const patches = localPatchPaths(lockSource, sourcePath).filter((path) => allPaths.includes(path));
+                        lockfiles.set(copyTargetForRepositoryPath(copy, sourcePath), { source: sourcePath, patches });
+                    }
+                    catch {
+                        // A scoped Dockerfile may reference a generated or context-external lockfile.
+                    }
+                }
+            }
+            continue;
+        }
+        if (instruction.command !== "RUN" || !/(?:^|[;&|]\s*)yarn\s+install\b/.test(instruction.value))
+            continue;
+        const lock = lockfiles.get(posix.join(workdir, "yarn.lock"));
+        if (!lock || lock.patches.length === 0)
+            continue;
+        const missing = lock.patches.filter((patch) => !copyDeliversPatch(copies, patch, posix.join(workdir, ".yarn/patches", basename(patch))));
+        if (missing.length === 0)
+            continue;
+        detections.push({
+            rule,
+            file: dockerfile.path,
+            line: instruction.line,
+            snippet: instruction.snippet,
+            label: `yarn install cannot access ${missing.length === 1 ? basename(missing[0] ?? "patch") : `${missing.length} referenced patches`}`,
+            data: { lockfile: lock.source, missingPatches: missing },
+        });
+    }
+    return detections;
+}
+function dockerInstructions(source) {
+    const lines = source.split(/\r?\n/);
+    const instructions = [];
+    for (let index = 0; index < lines.length; index += 1) {
+        const start = index;
+        const parts = [lines[index] ?? ""];
+        while (/\\\s*$/.test(parts[parts.length - 1] ?? "") && index + 1 < lines.length)
+            parts.push(lines[++index] ?? "");
+        const logical = parts.join("\n");
+        const match = /^\s*([A-Za-z]+)\s+([\s\S]*)$/.exec(logical);
+        if (!match || logical.trimStart().startsWith("#"))
+            continue;
+        instructions.push({ command: (match[1] ?? "").toUpperCase(), value: (match[2] ?? "").replace(/\\\s*\n/g, " "), line: start + 1, snippet: (lines[start] ?? "").trim().slice(0, 240) });
+    }
+    return instructions;
+}
+function parseDockerCopies(value, workdir) {
+    let input = value.trim();
+    let external = false;
+    while (input.startsWith("--")) {
+        const option = /^(--[^\s]+)\s*/.exec(input)?.[1];
+        if (!option)
+            break;
+        if (option.startsWith("--from="))
+            external = true;
+        input = input.slice(option.length).trimStart();
+    }
+    let paths = [];
+    if (input.startsWith("[")) {
+        try {
+            paths = JSON.parse(input);
+        }
+        catch {
+            return [];
+        }
+    }
+    else {
+        paths = input.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g)?.map((part) => part.replace(/^(?:"([\s\S]*)"|'([\s\S]*)')$/, "$1$2")) ?? [];
+    }
+    if (paths.length < 2)
+        return [];
+    const destination = paths.at(-1) ?? "";
+    const sources = paths.slice(0, -1);
+    const destinationIsDirectory = sources.length > 1 || destination.endsWith("/") || destination === ".";
+    const targetBase = containerPath(workdir, destination);
+    return sources.map((source) => ({
+        source: repoPathFromDocker(source),
+        target: posix.normalize(destinationIsDirectory ? posix.join(targetBase, basename(repoPathFromDocker(source))) : targetBase),
+        external,
+    }));
+}
+function repoPathFromDocker(path) {
+    return posix.normalize(path.replace(/^\/+/, "").replace(/^\.\//, ""));
+}
+function containerPath(workdir, path) {
+    return posix.normalize(path.startsWith("/") ? path : posix.join(workdir, path));
+}
+function localPatchPaths(lockSource, lockfile) {
+    const paths = new Set();
+    const pattern = /patch:[^\r\n]*?#(?:~\/|\.\/)?([^\s"',:]+\.patch)\b/g;
+    for (const match of lockSource.matchAll(pattern)) {
+        const relative = decodeURIComponent(match[1] ?? "");
+        if (!relative)
+            continue;
+        paths.add(posix.normalize(posix.join(dirname(lockfile), relative)));
+    }
+    return [...paths].sort();
+}
+function copyDeliversPatch(copies, repositoryPatch, expectedTarget) {
+    return copies.some((copy) => {
+        if (copy.external)
+            return copy.target === expectedTarget || expectedTarget.startsWith(`${copy.target}/`);
+        return copyContainsRepositoryPath(copy, repositoryPatch) && copyTargetForRepositoryPath(copy, repositoryPatch) === expectedTarget;
+    });
+}
+function copyContainsRepositoryPath(copy, repositoryPath) {
+    return repositoryPath === copy.source || copy.source === "." || repositoryPath.startsWith(`${copy.source}/`);
+}
+function copyTargetForRepositoryPath(copy, repositoryPath) {
+    return repositoryPath === copy.source ? copy.target : posix.join(copy.target, posix.relative(copy.source, repositoryPath));
 }
 function test(source, expression) {
     return new RegExp(expression.pattern, expression.flags).test(source);

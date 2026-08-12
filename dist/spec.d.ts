@@ -20,6 +20,10 @@ interface MissingFileMatch {
     triggerFiles: string[];
     requiredFiles: string[];
 }
+interface DockerMissingPatchesMatch {
+    kind: "docker-missing-patches";
+    files: string[];
+}
 export interface RuleSpec {
     id: string;
     title: string;
@@ -32,7 +36,7 @@ export interface RuleSpec {
     recommendation: string;
     complexity: "trivial" | "small" | "medium" | "large";
     tags: string[];
-    match: ContentMatch | MissingContentMatch | MissingFileMatch;
+    match: ContentMatch | MissingContentMatch | MissingFileMatch | DockerMissingPatchesMatch;
 }
 export interface AdversarySpec {
     id: string;
@@ -44,9 +48,25 @@ export interface AdversarySpec {
 export declare const spec: {
     readonly id: "yarn";
     readonly displayName: "Yarn";
-    readonly description: "Reviews Yarn projects for insecure registries, mutable resolutions, and missing lockfiles.";
-    readonly files: ["package.json", "**/package.json", "yarn.lock", "**/yarn.lock", ".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml", ".npmrc", "**/.npmrc", ".yarn/**"];
+    readonly description: "Reviews Yarn projects for unsafe configuration and incomplete dependency-resolution inputs.";
+    readonly files: ["package.json", "**/package.json", "yarn.lock", "**/yarn.lock", ".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml", ".npmrc", "**/.npmrc", "Dockerfile", "**/Dockerfile", "Dockerfile.*", "**/Dockerfile.*", "*.dockerfile", "**/*.dockerfile", ".yarn/**"];
     readonly rules: [{
+        readonly id: "yarn.docker-missing-patches";
+        readonly title: "Container install omits Yarn patch artifacts";
+        readonly summary: "Container install omits Yarn patch artifacts";
+        readonly category: "correctness";
+        readonly severity: "high";
+        readonly confidence: "high";
+        readonly whyItMatters: "A Yarn patch referenced by the copied lockfile is an install input; leaving it outside the container stage makes dependency resolution fail before the build starts.";
+        readonly impact: "The image build fails with ENOENT when Yarn resolves the patched dependency.";
+        readonly recommendation: "Copy the relevant workspace's .yarn/patches directory into the install stage before running yarn install.";
+        readonly complexity: "trivial";
+        readonly tags: ["correctness", "docker", "patch-protocol"];
+        readonly match: {
+            readonly kind: "docker-missing-patches";
+            readonly files: ["Dockerfile", "**/Dockerfile", "Dockerfile.*", "**/Dockerfile.*", "*.dockerfile", "**/*.dockerfile"];
+        };
+    }, {
         readonly id: "yarn.http-registry";
         readonly title: "Yarn uses a plaintext package registry";
         readonly summary: "Yarn uses a plaintext package registry";

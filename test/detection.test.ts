@@ -13,8 +13,13 @@ test("declares deterministic automatic detection", async () => {
     ".yarnrc",
     ".yarnrc.yml",
     "**/.yarnrc.yml",
+    "Dockerfile",
+    "**/Dockerfile",
+    "Dockerfile.*",
+    "**/Dockerfile.*",
+    "*.dockerfile",
+    "**/*.dockerfile",
     ".yarn/**"
   ]);
   assert.equal(manifest.detection?.entrypoint, undefined);
 });
-

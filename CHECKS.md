@@ -14,6 +14,17 @@ Public grounding: Yarn Berry configuration docs (`enableStrictSsl`, `checksumBeh
 
 ## High
 
+### `yarn.docker-missing-patches`
+
+| | |
+| --- | --- |
+| **What** | A container stage copies a patched Yarn lockfile and runs `yarn install` without copying the referenced patch artifacts |
+| **Why** | Local Yarn patches are dependency-resolution inputs; the install fails with `ENOENT` when the lockfile reaches a stage without them |
+| **Looks for** | A Docker stage that copies a `yarn.lock` with a repository-local `patch:` reference, enters that install directory, and runs `yarn install` before the matching patch file or directory is copied there |
+| **Stays quiet when** | The lockfile has no local patch; the required file, `.yarn/patches`, or containing project tree reaches the stage; or the lockfile is not used by that install |
+| **Public examples** | [Taskcluster’s merged fix](https://github.com/taskcluster/taskcluster/pull/8842), including the failing Yarn `ENOENT` log and the approved patch-directory copy |
+| **Remediation** | Copy the relevant workspace’s `.yarn/patches` directory into the install stage before running Yarn |
+
 ### `yarn.http-registry`
 
 | | |

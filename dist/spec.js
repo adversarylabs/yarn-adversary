@@ -1,12 +1,30 @@
 const RC_FILES = [".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml", ".npmrc", "**/.npmrc"];
 const LOCK_FILES = ["yarn.lock", "**/yarn.lock"];
 const PKG_FILES = ["package.json", "**/package.json"];
+const DOCKER_FILES = ["Dockerfile", "**/Dockerfile", "Dockerfile.*", "**/Dockerfile.*", "*.dockerfile", "**/*.dockerfile"];
 export const spec = {
     "id": "yarn",
     "displayName": "Yarn",
-    "description": "Reviews Yarn projects for insecure registries, mutable resolutions, and missing lockfiles.",
-    "files": [...PKG_FILES, ...LOCK_FILES, ...RC_FILES, ".yarn/**"],
+    "description": "Reviews Yarn projects for unsafe configuration and incomplete dependency-resolution inputs.",
+    "files": [...PKG_FILES, ...LOCK_FILES, ...RC_FILES, ...DOCKER_FILES, ".yarn/**"],
     "rules": [
+        {
+            "id": "yarn.docker-missing-patches",
+            "title": "Container install omits Yarn patch artifacts",
+            "summary": "Container install omits Yarn patch artifacts",
+            "category": "correctness",
+            "severity": "high",
+            "confidence": "high",
+            "whyItMatters": "A Yarn patch referenced by the copied lockfile is an install input; leaving it outside the container stage makes dependency resolution fail before the build starts.",
+            "impact": "The image build fails with ENOENT when Yarn resolves the patched dependency.",
+            "recommendation": "Copy the relevant workspace's .yarn/patches directory into the install stage before running yarn install.",
+            "complexity": "trivial",
+            "tags": ["correctness", "docker", "patch-protocol"],
+            "match": {
+                "kind": "docker-missing-patches",
+                "files": [...DOCKER_FILES]
+            }
+        },
         {
             "id": "yarn.http-registry",
             "title": "Yarn uses a plaintext package registry",
