@@ -1,9 +1,12 @@
+import { execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { basename, dirname, join, posix, sep } from "node:path";
+import { promisify } from "node:util";
 import { observationFor } from "./rules.js";
 import { spec } from "./spec.js";
 const SKIPPED = new Set([".adversary", ".git", ".hg", ".next", ".svn", "coverage", "dist", "node_modules", "target", "vendor"]);
 const MAX_FILES = 5000;
+const execute = promisify(execFile);
 export async function analyzeRepository(ctx) {
     // Full tree for existence/context checks; content uses CLI/SDK review scope.
     const allPaths = await walk(ctx.repoPath);
@@ -12,7 +15,26 @@ export async function analyzeRepository(ctx) {
             spec.files.some((glob) => matchesGlob(path, glob)),
         limit: MAX_FILES,
     });
-    const sources = scoped.map((file) => ({ path: file.path, source: file.content }));
+    const wholeTarget = ctx.change === null || ctx.change.scanMode === "all";
+    const sources = [];
+    for (const file of scoped) {
+        if (wholeTarget || file.status === "repository") {
+            sources.push({
+                path: file.path,
+                source: file.content,
+                changedLines: new Set(),
+                status: "repository",
+            });
+            continue;
+        }
+        const change = await changedSource(ctx, file.path);
+        sources.push({
+            path: file.path,
+            source: file.content,
+            changedLines: change.changedLines,
+            status: change.status,
+        });
+    }
     ctx.summary.files_scanned = sources.length;
     const detections = (await Promise.all(spec.rules.map((rule) => evaluate(rule, sources, allPaths, ctx.repoPath)))).flat();
     detections.sort((a, b) => a.rule.id.localeCompare(b.rule.id) || a.file.localeCompare(b.file) || a.line - b.line || a.label.localeCompare(b.label));
@@ -43,7 +65,7 @@ async function evaluate(rule, sources, allPaths, repoPath) {
         return matchingSources.flatMap((file) => {
             if (!test(file.source, match.trigger) || test(file.source, match.required))
                 return [];
-            const location = locate(file.source, match.trigger);
+            const location = locate(file, match.trigger);
             if (location === undefined)
                 return [];
             return [{ rule, file: file.path, ...location, label: rule.title, data: { requiredPattern: match.required.pattern } }];
@@ -52,7 +74,7 @@ async function evaluate(rule, sources, allPaths, repoPath) {
     return matchingSources.flatMap((file) => {
         if (!match.requires.every((pattern) => test(file.source, pattern)))
             return [];
-        const location = locate(file.source, match.pattern);
+        const location = locate(file, match.pattern);
         if (location === undefined)
             return [];
         return [{ rule, file: file.path, ...location, label: rule.title, data: { matchedPattern: match.pattern.pattern } }];
@@ -76,7 +98,7 @@ async function findDockerMissingPatches(rule, dockerfile, allPaths, repoPath) {
             continue;
         }
         if (instruction.command === "COPY" || instruction.command === "ADD") {
-            for (const copy of parseDockerCopies(instruction.value, workdir)) {
+            for (const copy of parseDockerCopies(instruction.value, workdir, instruction.line, instruction.endLine)) {
                 copies.push(copy);
                 if (copy.external)
                     continue;
@@ -84,7 +106,12 @@ async function findDockerMissingPatches(rule, dockerfile, allPaths, repoPath) {
                     try {
                         const lockSource = await readFile(join(repoPath, sourcePath), "utf8");
                         const patches = localPatchPaths(lockSource, sourcePath).filter((path) => allPaths.includes(path));
-                        lockfiles.set(copyTargetForRepositoryPath(copy, sourcePath), { source: sourcePath, patches });
+                        lockfiles.set(copyTargetForRepositoryPath(copy, sourcePath), {
+                            source: sourcePath,
+                            patches,
+                            line: instruction.line,
+                            endLine: instruction.endLine,
+                        });
                     }
                     catch {
                         // A scoped Dockerfile may reference a generated or context-external lockfile.
@@ -101,13 +128,19 @@ async function findDockerMissingPatches(rule, dockerfile, allPaths, repoPath) {
         const missing = lock.patches.filter((patch) => !copyDeliversPatch(copies, patch, posix.join(workdir, ".yarn/patches", basename(patch))));
         if (missing.length === 0)
             continue;
+        const line = eligibleLine(dockerfile, instruction.line, instruction.endLine)
+            ?? eligibleLine(dockerfile, lock.line, lock.endLine)
+            ?? copies.map((copy) => eligibleLine(dockerfile, copy.line, copy.endLine))
+                .find((candidate) => candidate !== undefined);
+        if (line === undefined)
+            continue;
         detections.push({
             rule,
             file: dockerfile.path,
-            line: instruction.line,
-            snippet: instruction.snippet,
+            line,
+            snippet: dockerfile.source.split(/\r?\n/)[line - 1]?.trim().slice(0, 240) ?? "",
             label: `yarn install cannot access ${missing.length === 1 ? basename(missing[0] ?? "patch") : `${missing.length} referenced patches`}`,
-            data: { lockfile: lock.source, missingPatches: missing },
+            data: { lockfile: lock.source, missingPatches: missing, installLine: instruction.line },
         });
     }
     return detections;
@@ -124,11 +157,17 @@ function dockerInstructions(source) {
         const match = /^\s*([A-Za-z]+)\s+([\s\S]*)$/.exec(logical);
         if (!match || logical.trimStart().startsWith("#"))
             continue;
-        instructions.push({ command: (match[1] ?? "").toUpperCase(), value: (match[2] ?? "").replace(/\\\s*\n/g, " "), line: start + 1, snippet: (lines[start] ?? "").trim().slice(0, 240) });
+        instructions.push({
+            command: (match[1] ?? "").toUpperCase(),
+            value: (match[2] ?? "").replace(/\\\s*\n/g, " "),
+            line: start + 1,
+            endLine: index + 1,
+            snippet: (lines[start] ?? "").trim().slice(0, 240),
+        });
     }
     return instructions;
 }
-function parseDockerCopies(value, workdir) {
+function parseDockerCopies(value, workdir, line, endLine) {
     let input = value.trim();
     let external = false;
     while (input.startsWith("--")) {
@@ -161,6 +200,8 @@ function parseDockerCopies(value, workdir) {
         source: repoPathFromDocker(source),
         target: posix.normalize(destinationIsDirectory ? posix.join(targetBase, basename(repoPathFromDocker(source))) : targetBase),
         external,
+        line,
+        endLine,
     }));
 }
 function repoPathFromDocker(path) {
@@ -196,12 +237,71 @@ function copyTargetForRepositoryPath(copy, repositoryPath) {
 function test(source, expression) {
     return new RegExp(expression.pattern, expression.flags).test(source);
 }
-function locate(source, expression) {
-    const match = new RegExp(expression.pattern, expression.flags).exec(source);
-    if (match?.index === undefined)
-        return undefined;
-    const line = source.slice(0, match.index).split(/\r?\n/).length;
-    return { line, snippet: source.split(/\r?\n/)[line - 1]?.trim().slice(0, 240) ?? "" };
+function locate(file, expression) {
+    const flags = expression.flags.includes("g") ? expression.flags : `${expression.flags}g`;
+    const pattern = new RegExp(expression.pattern, flags);
+    const sourceLines = file.source.split(/\r?\n/);
+    for (const match of file.source.matchAll(pattern)) {
+        if (match.index === undefined)
+            continue;
+        const startLine = file.source.slice(0, match.index).split(/\r?\n/).length;
+        const endLine = startLine + (match[0]?.match(/\r?\n/g)?.length ?? 0);
+        const line = eligibleLine(file, startLine, endLine);
+        if (line === undefined)
+            continue;
+        return { line, snippet: sourceLines[line - 1]?.trim().slice(0, 240) ?? "" };
+    }
+    return undefined;
+}
+function eligibleLine(file, startLine, endLine) {
+    if (file.status === "repository" || file.status === "added")
+        return startLine;
+    for (let line = startLine; line <= endLine; line += 1) {
+        if (file.changedLines.has(line))
+            return line;
+    }
+    return undefined;
+}
+async function changedSource(ctx, path) {
+    const base = ctx.change?.baseRef;
+    if (base === undefined || !(await existsAtRevision(ctx.repoPath, base, path))) {
+        return { changedLines: new Set(), status: "added" };
+    }
+    const args = ["diff", "--unified=0", base];
+    const head = ctx.change?.headRef;
+    if (head !== undefined && !ctx.change?.worktree)
+        args.push(head);
+    args.push("--", path);
+    const patch = await gitOutput(ctx.repoPath, args);
+    return { changedLines: changedLineNumbers(patch), status: "modified" };
+}
+async function existsAtRevision(repoPath, revision, path) {
+    try {
+        await execute("git", ["-C", repoPath, "cat-file", "-e", `${revision}:${path}`], {
+            maxBuffer: 1024 * 1024,
+        });
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+async function gitOutput(repoPath, args) {
+    const result = await execute("git", ["-C", repoPath, ...args], {
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 * 1024,
+    });
+    return result.stdout;
+}
+function changedLineNumbers(patch) {
+    const lines = new Set();
+    for (const match of patch.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)) {
+        const start = Number(match[1]);
+        const count = match[2] === undefined ? 1 : Number(match[2]);
+        for (let line = start; line < start + count; line += 1)
+            lines.add(line);
+    }
+    return lines;
 }
 async function walk(root) {
     const files = [];
