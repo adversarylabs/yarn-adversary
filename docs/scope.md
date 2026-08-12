@@ -15,6 +15,7 @@ Review Yarn for insecure registries, mutable resolutions, and missing lockfiles.
 - Insecure registries
 - Mutable resolutions
 - Missing yarn.lock
+- Container stages that install from patched Yarn lockfiles without the referenced patch artifacts
 
 ## Out of scope (not a miss for this adversary)
 

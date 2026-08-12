@@ -1,0 +1,6 @@
+__metadata:
+  version: 8
+
+"react-virtualized@patch:react-virtualized@npm%3A9.22.5#~/.yarn/patches/react-virtualized-npm-9.22.5-be95b8e1a8.patch":
+  version: 9.22.5
+  resolution: "react-virtualized@patch:react-virtualized@npm%3A9.22.5#~/.yarn/patches/react-virtualized-npm-9.22.5-be95b8e1a8.patch::version=9.22.5&hash=bcabeb"

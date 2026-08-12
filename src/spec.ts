@@ -4,23 +4,42 @@ export interface MatchExpression { pattern: string; flags: string }
 interface ContentMatch { kind: "content"; files: string[]; pattern: MatchExpression; requires: MatchExpression[] }
 interface MissingContentMatch { kind: "missing-content"; files: string[]; trigger: MatchExpression; required: MatchExpression }
 interface MissingFileMatch { kind: "missing-file"; triggerFiles: string[]; requiredFiles: string[] }
+interface DockerMissingPatchesMatch { kind: "docker-missing-patches"; files: string[] }
 export interface RuleSpec {
   id: string; title: string; summary: string; category: string; severity: Severity; confidence: Confidence;
   whyItMatters: string; impact: string; recommendation: string; complexity: "trivial" | "small" | "medium" | "large"; tags: string[];
-  match: ContentMatch | MissingContentMatch | MissingFileMatch;
+  match: ContentMatch | MissingContentMatch | MissingFileMatch | DockerMissingPatchesMatch;
 }
 export interface AdversarySpec { id: string; displayName: string; description: string; files: string[]; rules: RuleSpec[] }
 
 const RC_FILES = [".yarnrc", ".yarnrc.yml", "**/.yarnrc.yml", ".npmrc", "**/.npmrc"] as const;
 const LOCK_FILES = ["yarn.lock", "**/yarn.lock"] as const;
 const PKG_FILES = ["package.json", "**/package.json"] as const;
+const DOCKER_FILES = ["Dockerfile", "**/Dockerfile", "Dockerfile.*", "**/Dockerfile.*", "*.dockerfile", "**/*.dockerfile"] as const;
 
 export const spec = {
   "id": "yarn",
   "displayName": "Yarn",
-  "description": "Reviews Yarn projects for insecure registries, mutable resolutions, and missing lockfiles.",
-  "files": [...PKG_FILES, ...LOCK_FILES, ...RC_FILES, ".yarn/**"],
+  "description": "Reviews Yarn projects for unsafe configuration and incomplete dependency-resolution inputs.",
+  "files": [...PKG_FILES, ...LOCK_FILES, ...RC_FILES, ...DOCKER_FILES, ".yarn/**"],
   "rules": [
+    {
+      "id": "yarn.docker-missing-patches",
+      "title": "Container install omits Yarn patch artifacts",
+      "summary": "Container install omits Yarn patch artifacts",
+      "category": "correctness",
+      "severity": "high",
+      "confidence": "high",
+      "whyItMatters": "A Yarn patch referenced by the copied lockfile is an install input; leaving it outside the container stage makes dependency resolution fail before the build starts.",
+      "impact": "The image build fails with ENOENT when Yarn resolves the patched dependency.",
+      "recommendation": "Copy the relevant workspace's .yarn/patches directory into the install stage before running yarn install.",
+      "complexity": "trivial",
+      "tags": ["correctness", "docker", "patch-protocol"],
+      "match": {
+        "kind": "docker-missing-patches",
+        "files": [...DOCKER_FILES]
+      }
+    },
     {
       "id": "yarn.http-registry",
       "title": "Yarn uses a plaintext package registry",

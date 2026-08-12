@@ -1,6 +1,6 @@
 name: deps/yarn
 version: 0.0.6
-description: Reviews Yarn projects for insecure registries, mutable resolutions, and missing lockfiles.
+description: Reviews Yarn projects for unsafe configuration and incomplete dependency-resolution inputs.
 
 triggers:
   manual: true
@@ -11,6 +11,12 @@ triggers:
     - ".yarnrc"
     - ".yarnrc.yml"
     - "**/.yarnrc.yml"
+    - "Dockerfile"
+    - "**/Dockerfile"
+    - "Dockerfile.*"
+    - "**/Dockerfile.*"
+    - "*.dockerfile"
+    - "**/*.dockerfile"
 
 detection:
   files:
@@ -19,6 +25,12 @@ detection:
     - ".yarnrc"
     - ".yarnrc.yml"
     - "**/.yarnrc.yml"
+    - "Dockerfile"
+    - "**/Dockerfile"
+    - "Dockerfile.*"
+    - "**/Dockerfile.*"
+    - "*.dockerfile"
+    - "**/*.dockerfile"
     - ".yarn/**"
 
 runtime:

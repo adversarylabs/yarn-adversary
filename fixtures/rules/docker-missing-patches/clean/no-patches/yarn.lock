@@ -1,0 +1,6 @@
+__metadata:
+  version: 8
+
+"library@npm:^1.0.0":
+  version: 1.0.0
+  resolution: "library@npm:1.0.0"

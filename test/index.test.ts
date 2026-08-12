@@ -6,6 +6,7 @@ import { createApp } from "../src/index.ts";
 const fixture = (name: string) => new URL(`../fixtures/${name}`, import.meta.url).pathname;
 const review = (name: string, raw = false) => createApp().run({ input: { source: { path: fixture(name) } }, includeRawObservations: raw });
 const ruleCases = [
+  { key: "docker-missing-patches", id: "yarn.docker-missing-patches" },
   { key: "http-registry", id: "yarn.http-registry" },
   { key: "strict-ssl-disabled", id: "yarn.strict-ssl-disabled" },
   { key: "checksum-ignored", id: "yarn.checksum-ignored" },
@@ -22,6 +23,32 @@ test("every initial rule has focused vulnerable and clean coverage", async () =>
     const clean = await review(`rules/${rule.key}/clean`);
     assert.equal(clean.findings.some((finding) => finding.ruleId === rule.id), false, `${rule.id} flagged its clean fixture`);
   }
+});
+
+test("missing patch finding identifies the install and referenced artifact", async () => {
+  const output = await review("rules/docker-missing-patches/vulnerable", true);
+  const observation = output.rawObservations?.find((item) => item.ruleId === "yarn.docker-missing-patches");
+  assert.equal(observation?.location?.file, "Dockerfile");
+  assert.equal(observation?.location?.line, 5);
+  assert.deepEqual(observation?.evidence?.missingPatches, ["ui/.yarn/patches/react-virtualized-npm-9.22.5-be95b8e1a8.patch"]);
+  assert.equal(observation?.evidence?.lockfile, "ui/yarn.lock");
+});
+
+test("missing patch rule can use unchanged lockfile context for a changed Dockerfile", async () => {
+  const output = await createApp().run({
+    input: {
+      source: { path: fixture("rules/docker-missing-patches/vulnerable") },
+      change: {
+        type: "diff",
+        base_ref: "base",
+        head_ref: "head",
+        scan_mode: "changed",
+        changed_files: ["Dockerfile"],
+      },
+    },
+    includeRawObservations: true,
+  });
+  assert.equal(output.findings.some((finding) => finding.ruleId === "yarn.docker-missing-patches"), true);
 });
 
 test("accepts a repository without applicable configuration", async () => {
