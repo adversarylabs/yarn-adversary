@@ -5,7 +5,7 @@ import { analyzeRepository } from "./analyze.js";
 import { registerRules } from "./rules.js";
 
 export function createApp(): Adversary {
-  const app = new Adversary({ name: "deps/yarn", version: "0.0.8", review: { maximumFindings: 12 } });
+  const app = new Adversary({ name: "deps/yarn", version: "0.0.9", review: { maximumFindings: 12 } });
   registerRules(app);
   app.rule("yarn.review", async (ctx) => analyzeRepository(ctx));
   return app;
