@@ -1,23 +1,21 @@
 # Yarn adversary
 
-Reviews Yarn projects for insecure registries, mutable resolutions, and missing lockfiles.
+Reviews Yarn projects for unsafe configuration and incomplete dependency-resolution inputs.
 
-## Checks
+## Goals
 
-- **Yarn uses a plaintext package registry:** Use an authenticated HTTPS registry.
-- **Container install omits Yarn patch artifacts:** Copy the referenced `.yarn/patches` content before installing.
-- **Yarn resolution tracks a mutable branch:** Pin VCS resolutions to commits.
-- **Yarn project has no lockfile:** Commit yarn.lock.
+The adversary is designed to produce a small number of high-confidence,
+actionable findings grounded in concrete repository evidence. Its review should
+be deterministic where possible, explicit about impact, and quiet when the
+available evidence does not justify a finding.
 
-## Development
+## Scope
 
-```sh
-npm ci
-npm test
-adversary validate .
-adversary pack --check .
-```
+It evaluates Yarn manifests, lockfiles, registry and TLS settings, authentication, mutable resolutions, checksums, and container patch inputs.
 
-## Automatic detection
+The complete detector or review inventory is maintained in
+[CHECKS.md](CHECKS.md).
 
-`adversary auto` selects the yarn adversary when changes include `yarn.lock` or `**/yarn.lock`, plus the other domain-specific patterns declared in `adversary.yaml`. Unrelated changes do not select it.
+## Boundaries
+
+It owns this dependency manager's configuration and resolution inputs. Package source code and other ecosystem concerns remain with language and security specialists.
