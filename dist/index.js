@@ -17572,7 +17572,7 @@ function matchesGlob(path, glob) {
 
 // src/index.ts
 function createApp() {
-  const app = new Adversary({ name: "deps/yarn", version: "0.0.9", review: { maximumFindings: 12 } });
+  const app = new Adversary({ name: "deps/yarn", version: "0.0.11", review: { maximumFindings: 12 } });
   registerRules(app);
   app.rule("yarn.review", async (ctx) => analyzeRepository(ctx));
   return app;

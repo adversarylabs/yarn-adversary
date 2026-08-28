@@ -1,5 +1,5 @@
 name: adversarylabs/deps/yarn
-version: 0.0.10
+version: 0.0.11
 description: Reviews Yarn projects for unsafe configuration and incomplete dependency-resolution inputs.
 
 triggers:
